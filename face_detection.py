@@ -10,8 +10,14 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
+
 def load_encodings():
     file_directory = os.path.join(os.getcwd(), 'faces', 'faces.json')
+    if not os.path.exists(file_directory):
+        file = io.open(file_directory, 'w')
+        file.write(json.dumps({}))
+        file.close()
+
     file = io.open(file_directory, 'r')
     face_obj = json.loads(file.read())
     file.close()
@@ -71,6 +77,11 @@ def save_groups(groups):
 
 def load_groups():
     file_path = os.path.join(os.getcwd(), 'faces', 'groups.json')
+
+    if not os.path.exists(file_path):
+        gr = Groups()
+        return gr
+
     fs = open(file_path, 'r')
     dict = json.loads(fs.read())
     fs.close()
@@ -78,11 +89,37 @@ def load_groups():
     return gr
 
 
+# Remove files that don't exist
+def clean_encodings(encodings):
+    temp_folder_files = glob(os.path.join(os.getcwd(), 'faces', 'temp', "*.jpg"))
+    face_image_file = list(encodings.keys())
+
+    for file in face_image_file:
+
+        file_with_path = os.path.join(os.getcwd(), 'faces', 'temp', file)
+        if file_with_path not in temp_folder_files:
+            encodings.pop(file)
+
+    return encodings
+
+
 def group_faces():
     encodings = load_encodings()
-    groups = Groups()
+    groups = load_groups()
 
+    # Find faces that have not been put into a group
     faces = list(encodings.keys())
+
+    # Get a list of faces that have already been seen
+    known_faces = []
+    for group_name, group_members in groups.get_groups().items():
+        for member in group_members:
+            known_faces.append(member)
+
+    # difference of two sets
+    faces = list(set(faces)-set(known_faces))
+    print(faces)
+
     # While there are faces waiting to be put into a group
     while faces:
         face = faces.pop()
@@ -116,7 +153,7 @@ def group_faces():
                 member_face_encoding = np.ndarray((1, 128), buffer=np.array(member_face_encoding))
 
                 # Compare encoding
-                result = face_recognition.compare_faces(current_face_encoding, member_face_encoding, tolerance=0.5)
+                result = face_recognition.compare_faces(current_face_encoding, member_face_encoding, tolerance=0.4)
 
                 if result[0]:
                     # Matched with face. Added +1 to consensus
@@ -127,15 +164,17 @@ def group_faces():
 
             if percentage_matched > threshold:
                 # Add faces to the group
-                logging.info("adding to group", group_name, face)
+                logging.info("adding to group" + group_name + face)
                 groups.add_to_group(group_name, face)
                 face_added_to_group = True
                 break
 
+            print(percentage_matched)
+
         # Create a new group if the face was not added to the group
         if not face_added_to_group:
             new_group_name = groups.create_new_group_with_key(face)
-            logging.info("making new group", new_group_name, face)
+            logging.info("making new group" + new_group_name + face)
 
     # Make groups
     groups_dict = groups.get_groups()
@@ -181,17 +220,26 @@ def save_analyzed_files(db):
     file = open(path, 'w')
     file.write(json.dumps(db))
     file.close()
-    # logging.info("List of files analyzed saved.")
+    logging.info("List of files analyzed saved.")
 
 
 def extract_encodings():
 
     db = load_analyzed_files()
 
-    encodings = {}
+    encodings = load_encodings()
     people = glob(os.path.join(os.getcwd(), 'detected_objects', 'person', '*.jpg'))
 
-    for person_image_path in people:
+    seen_faces = db['files']
+    # Get a list of unseen faces
+    unseen_people = list(set(seen_faces)-set(seen_faces))
+
+    file_number = 0
+
+    # Iterate through each photo a person
+    for person_image_path in unseen_people:
+        file_number += 1
+        logging.info("Checking file " + str(file_number) + "/" + str(len(people)))
 
         file_name = os.path.basename(person_image_path)  # get filename instead of entire path
 
@@ -201,16 +249,19 @@ def extract_encodings():
             # logging.info("Skipping already analyzed file")
             continue
 
+        if file_name in encodings.keys():
+            # file has been seen
+            # Add to analyzed
+            db['files'].append(file_name)
+            continue
+
         # Start counting up the face # seen
         db['face_num'] += 1
         image = face_recognition.load_image_file(person_image_path)
         face_locations = face_recognition.face_locations(image)
 
-        # Get file name
-        file_name = os.path.basename(person_image_path)
-
-        # Check if thre are any faces in the image
-        if face_locations != []:
+        # Check if there are any faces in the image
+        if face_locations:
 
             location_to_copy_to = os.path.join(os.getcwd(), 'faces', 'temp', file_name)
             # Save copy file to faces
@@ -234,9 +285,10 @@ def extract_encodings():
             save_encodings(encodings)
 
         db['files'].append(file_name)
-        save_analyzed_files(db)
+        if file_number % 500 == 0:
+            save_analyzed_files(db)
 
-    save_analyzed_files()
+    save_analyzed_files(db)
     save_encodings(encodings)
     logging.info("done")
 
@@ -245,7 +297,12 @@ if __name__ == "__main__":
     if not os.path.exists(os.path.join(os.getcwd(), 'faces', 'temp')):
         os.mkdir(os.path.join(os.getcwd(), 'faces', 'temp'))
 
+    # Clean encodings - i.e. remove any missing files
+    encodings = clean_encodings(load_encodings())
+    save_encodings(encodings)
+
     while True:
         extract_encodings()
-        # group_faces()
+        group_faces()
+        logging.info("Done everything! Sleeping for 5s")
         time.sleep(5)
