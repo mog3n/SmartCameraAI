@@ -1,0 +1,10 @@
+/cfg
+/data
+/detected_objects
+/detectron2
+/faces
+/models
+/venv
+/video
+.idea
+annotated_videos.json
